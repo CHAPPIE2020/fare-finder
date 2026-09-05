@@ -1,26 +1,18 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+import { useDocumentMeta } from "@/hooks/useDocumentMeta";
+import type { AuthenticatedOutletContext } from "@/routes/ProtectedRoute";
 
-export const Route = createFileRoute("/_authenticated/app")({
-  head: () => ({
-    meta: [
-      { title: "Dashboard — Flight Price Notifier" },
-      { name: "description", content: "你的航線追蹤儀表板。Your route-watching dashboard." },
-      { property: "og:title", content: "Dashboard — Flight Price Notifier" },
-      { property: "og:description", content: "Your route-watching dashboard." },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "robots", content: "noindex" },
-    ],
-  }),
-  component: AppShell,
-});
+export function AppShell() {
+  useDocumentMeta(
+    "Dashboard — Flight Price Notifier",
+    "你的航線追蹤儀表板。Your route-watching dashboard.",
+  );
 
-function AppShell() {
-  const { user } = Route.useRouteContext();
+  const { user } = useOutletContext<AuthenticatedOutletContext>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -28,7 +20,7 @@ function AppShell() {
     await queryClient.cancelQueries();
     queryClient.clear();
     await supabase.auth.signOut();
-    navigate({ to: "/auth", replace: true });
+    navigate("/sign-in", { replace: true });
   }
 
   return (
@@ -46,16 +38,13 @@ function AppShell() {
 
       <main className="bg-aurora">
         <div className="mx-auto max-w-3xl px-5 py-24">
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-            Hi {user.email}
-          </h1>
+          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Hi {user.email}</h1>
           <div className="mt-8 rounded-2xl border border-border bg-card p-7">
             <p className="text-base leading-relaxed">
               你的航線追蹤儀表板即將上線 — 下一個里程碑會加上訂閱航線的功能。
             </p>
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-              Your dashboard is coming soon. Route-subscription will be added in the next
-              milestone.
+              Your dashboard is coming soon. Route-subscription will be added in the next milestone.
             </p>
           </div>
         </div>

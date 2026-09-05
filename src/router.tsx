@@ -1,16 +1,29 @@
-import { QueryClient } from "@tanstack/react-query";
-import { createRouter } from "@tanstack/react-router";
-import { routeTree } from "./routeTree.gen";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 
-export const getRouter = () => {
-  const queryClient = new QueryClient();
+import { RootLayout } from "@/layouts/RootLayout";
+import { ProtectedRoute } from "@/routes/ProtectedRoute";
+import { RouteErrorBoundary } from "@/routes/RouteErrorBoundary";
+import { Landing } from "@/pages/Landing";
+import { AuthPage } from "@/pages/AuthPage";
+import { AppShell } from "@/pages/AppShell";
+import { NotFoundPage } from "@/pages/NotFoundPage";
 
-  const router = createRouter({
-    routeTree,
-    context: { queryClient },
-    scrollRestoration: true,
-    defaultPreloadStaleTime: 0,
-  });
-
-  return router;
-};
+export const router = createBrowserRouter([
+  {
+    path: "/",
+    element: <RootLayout />,
+    errorElement: <RouteErrorBoundary />,
+    children: [
+      { index: true, element: <Landing /> },
+      { path: "sign-in", element: <AuthPage mode="signin" /> },
+      { path: "sign-up", element: <AuthPage mode="signup" /> },
+      // Legacy link kept working: the previous single `/auth` toggle page.
+      { path: "auth", element: <Navigate to="/sign-in" replace /> },
+      {
+        element: <ProtectedRoute />,
+        children: [{ path: "app", element: <AppShell /> }],
+      },
+      { path: "*", element: <NotFoundPage /> },
+    ],
+  },
+]);

@@ -1,42 +1,39 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
+import { useDocumentMeta } from "@/hooks/useDocumentMeta";
 
-export const Route = createFileRoute("/auth")({
-  head: () => ({
-    meta: [
-      { title: "Sign in / 登入 — Flight Price Notifier" },
-      {
-        name: "description",
-        content: "登入或註冊 Flight Price Notifier，開始追蹤台北出發的機票價格。",
-      },
-      { property: "og:title", content: "Sign in / 登入 — Flight Price Notifier" },
-      {
-        property: "og:description",
-        content: "Sign in or create an account to start watching flight fares.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
-  component: AuthPage,
-});
+type AuthMode = "signin" | "signup";
 
-function AuthPage() {
+const COPY: Record<AuthMode, { title: string; subtitle: string; description: string }> = {
+  signin: {
+    title: "Sign in / 登入",
+    subtitle: "用 email 與密碼登入你的帳號。",
+    description: "登入 Flight Price Notifier，開始追蹤台北出發的機票價格。",
+  },
+  signup: {
+    title: "Sign up / 註冊",
+    subtitle: "建立帳號，開始追蹤機票價格。",
+    description: "註冊 Flight Price Notifier，開始追蹤台北出發的機票價格。",
+  },
+};
+
+export function AuthPage({ mode }: { mode: AuthMode }) {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  useDocumentMeta(`${COPY[mode].title} — Flight Price Notifier`, COPY[mode].description);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) navigate({ to: "/app", replace: true });
+      if (data.session) navigate("/app", { replace: true });
     });
   }, [navigate]);
 
@@ -63,7 +60,7 @@ function AuthPage() {
 
     const { data } = await supabase.auth.getSession();
     if (data.session) {
-      navigate({ to: "/app", replace: true });
+      navigate("/app", { replace: true });
     } else {
       setError("請至信箱確認你的帳號後再登入。Please confirm your email, then sign in.");
     }
@@ -77,14 +74,8 @@ function AuthPage() {
         </Link>
 
         <div className="mt-4 rounded-2xl border border-border bg-card p-7">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {mode === "signin" ? "Sign in / 登入" : "Sign up / 註冊"}
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {mode === "signin"
-              ? "用 email 與密碼登入你的帳號。"
-              : "建立帳號，開始追蹤機票價格。"}
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{COPY[mode].title}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{COPY[mode].subtitle}</p>
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <div className="space-y-2">
@@ -116,15 +107,15 @@ function AuthPage() {
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "請稍候…" : mode === "signin" ? "Sign in / 登入" : "Sign up / 註冊"}
+              {loading ? "請稍候…" : COPY[mode].title}
             </Button>
           </form>
 
           <button
             type="button"
             onClick={() => {
-              setMode(mode === "signin" ? "signup" : "signin");
               setError(null);
+              navigate(mode === "signin" ? "/sign-up" : "/sign-in");
             }}
             className="mt-5 w-full text-sm text-muted-foreground transition-colors hover:text-foreground"
           >

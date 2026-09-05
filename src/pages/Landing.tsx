@@ -1,29 +1,9 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { Link } from "react-router-dom";
 import { BellRing, PlaneTakeoff, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useReveal } from "@/hooks/useReveal";
-
-export const Route = createFileRoute("/")({
-  head: () => ({
-    meta: [
-      { title: "Flight Price Notifier — 機票降價通知" },
-      {
-        name: "description",
-        content:
-          "設定台北出發的航線與目標價，機票降價就寄 email 通知你。Set a route and a target price — we email you when the fare drops.",
-      },
-      { property: "og:title", content: "Flight Price Notifier — 機票降價通知" },
-      {
-        property: "og:description",
-        content: "Set a route and a target price — we email you when the fare drops.",
-      },
-      { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-    ],
-  }),
-  component: Landing,
-});
+import { useDocumentMeta } from "@/hooks/useDocumentMeta";
 
 const features = [
   {
@@ -65,7 +45,12 @@ function FeatureCard({ index, feature }: { index: number; feature: (typeof featu
   );
 }
 
-function Landing() {
+export function Landing() {
+  useDocumentMeta(
+    "Flight Price Notifier — 機票降價通知",
+    "設定台北出發的航線與目標價，機票降價就寄 email 通知你。Set a route and a target price — we email you when the fare drops.",
+  );
+
   const heroRef = useReveal<HTMLDivElement>(60);
 
   return (
@@ -76,17 +61,14 @@ function Landing() {
             Flight Price Notifier
           </span>
           <Button asChild size="sm">
-            <Link to="/auth">Sign in / 登入</Link>
+            <Link to="/sign-in">Sign in / 登入</Link>
           </Button>
         </div>
       </header>
 
       <main>
         <section className="bg-aurora">
-          <div
-            ref={heroRef}
-            className="reveal mx-auto max-w-3xl px-5 py-24 text-center sm:py-32"
-          >
+          <div ref={heroRef} className="reveal mx-auto max-w-3xl px-5 py-24 text-center sm:py-32">
             <span className="inline-flex rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground">
               台北出發 · 熱門航線監控
             </span>
@@ -101,7 +83,7 @@ function Landing() {
             </p>
             <div className="mt-9 flex justify-center">
               <Button asChild size="lg">
-                <Link to="/auth">Sign in / 登入</Link>
+                <Link to="/sign-in">Sign in / 登入</Link>
               </Button>
             </div>
           </div>
