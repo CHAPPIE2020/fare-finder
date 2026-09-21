@@ -2,6 +2,7 @@ import { useNavigate, useOutletContext } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
+import { PlanSubscriptions } from "@/components/PlanSubscriptions";
 import { supabase } from "@/integrations/supabase/client";
 import { useDocumentMeta } from "@/hooks/useDocumentMeta";
 import type { AuthenticatedOutletContext } from "@/routes/ProtectedRoute";
@@ -39,13 +40,11 @@ export function AppShell() {
       <main className="bg-aurora">
         <div className="mx-auto max-w-3xl px-5 py-24">
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Hi {user.email}</h1>
-          <div className="mt-8 rounded-2xl border border-border bg-card p-7">
-            <p className="text-base leading-relaxed">
-              你的航線追蹤儀表板即將上線 — 下一個里程碑會加上訂閱航線的功能。
-            </p>
-            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-              Your dashboard is coming soon. Route-subscription will be added in the next milestone.
-            </p>
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            選一條航線、設定 TWD 目標價,價格降到你要的水準就會寄信通知你。
+          </p>
+          <div className="mt-8">
+            <PlanSubscriptions email={user.email ?? ""} />
           </div>
         </div>
       </main>
