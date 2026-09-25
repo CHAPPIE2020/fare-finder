@@ -1,4 +1,4 @@
-﻿import { useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
@@ -13,8 +13,17 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { supabase } from "@/integrations/supabase/client";
 
 const FLIGHT_API_URL = import.meta.env["VITE_FLIGHT_API_URL"];
+
+/** The API identifies the user from this Supabase access token, not from a client-sent email. */
+async function authHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("登入狀態已失效,請重新登入");
+  return { Authorization: `Bearer ${token}` };
+}
 
 type PlanName = "tokyo" | "seoul";
 
@@ -35,21 +44,17 @@ type Subscription = {
   currency: string;
 };
 
-async function fetchSubscriptions(email: string): Promise<Subscription[]> {
-  const res = await fetch(`${FLIGHT_API_URL}/subscriptions?email=${encodeURIComponent(email)}`);
+async function fetchSubscriptions(): Promise<Subscription[]> {
+  const res = await fetch(`${FLIGHT_API_URL}/subscriptions`, { headers: await authHeaders() });
   if (!res.ok) throw new Error("讀取訂閱狀態失敗");
   const data = (await res.json()) as { subscriptions: Subscription[] };
   return data.subscriptions;
 }
 
-async function saveSubscription(payload: {
-  email: string;
-  plan_name: PlanName;
-  target_price: number;
-}) {
+async function saveSubscription(payload: { plan_name: PlanName; target_price: number }) {
   const res = await fetch(`${FLIGHT_API_URL}/subscribe`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error("儲存訂閱失敗");
@@ -62,7 +67,7 @@ export function PlanSubscriptions({ email }: { email: string }) {
 
   const { data: subscriptions, isLoading } = useQuery({
     queryKey: ["subscriptions", email],
-    queryFn: () => fetchSubscriptions(email),
+    queryFn: fetchSubscriptions,
     enabled: Boolean(FLIGHT_API_URL && email),
   });
 
@@ -93,7 +98,7 @@ export function PlanSubscriptions({ email }: { email: string }) {
             isLoading={isLoading}
             isSaving={mutation.isPending && mutation.variables?.plan_name === plan.name}
             onSubmit={(targetPrice) =>
-              mutation.mutate({ email, plan_name: plan.name, target_price: targetPrice })
+              mutation.mutate({ plan_name: plan.name, target_price: targetPrice })
             }
           />
         );
