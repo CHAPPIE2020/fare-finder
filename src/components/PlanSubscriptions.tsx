@@ -44,6 +44,29 @@ type Subscription = {
   currency: string;
 };
 
+type LatestPrice = {
+  route: string;
+  plan_name: PlanName;
+  month: string;
+  price: number;
+  checked_at: string;
+};
+
+/** Latest cheapest fare per route, written by the parser every 30 minutes (public, no login). */
+async function fetchPrices(): Promise<LatestPrice[]> {
+  const res = await fetch(`${FLIGHT_API_URL}/prices`);
+  if (!res.ok) throw new Error("讀取票價失敗");
+  const data = (await res.json()) as { prices: LatestPrice[] };
+  return data.prices;
+}
+
+function timeAgo(iso: string): string {
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (minutes < 1) return "剛剛";
+  if (minutes < 60) return `${minutes} 分鐘前`;
+  return `${Math.round(minutes / 60)} 小時前`;
+}
+
 async function fetchSubscriptions(): Promise<Subscription[]> {
   const res = await fetch(`${FLIGHT_API_URL}/subscriptions`, { headers: await authHeaders() });
   if (!res.ok) throw new Error("讀取訂閱狀態失敗");
@@ -71,6 +94,13 @@ export function PlanSubscriptions({ email }: { email: string }) {
     enabled: Boolean(FLIGHT_API_URL && email),
   });
 
+  const { data: prices } = useQuery({
+    queryKey: ["prices"],
+    queryFn: fetchPrices,
+    enabled: Boolean(FLIGHT_API_URL),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const mutation = useMutation({
     mutationFn: saveSubscription,
     onSuccess: () => {
@@ -95,6 +125,7 @@ export function PlanSubscriptions({ email }: { email: string }) {
             key={plan.name}
             plan={plan}
             existing={existing}
+            latest={prices?.find((p) => p.plan_name === plan.name)}
             isLoading={isLoading}
             isSaving={mutation.isPending && mutation.variables?.plan_name === plan.name}
             onSubmit={(targetPrice) =>
@@ -110,12 +141,14 @@ export function PlanSubscriptions({ email }: { email: string }) {
 function PlanCard({
   plan,
   existing,
+  latest,
   isLoading,
   isSaving,
   onSubmit,
 }: {
   plan: Plan;
   existing: Subscription | undefined;
+  latest: LatestPrice | undefined;
   isLoading: boolean;
   isSaving: boolean;
   onSubmit: (targetPrice: number) => void;
@@ -140,6 +173,15 @@ function PlanCard({
           <CardTitle>{plan.title}</CardTitle>
           {existing && <Badge variant="secondary">已訂閱</Badge>}
         </div>
+        {latest && (
+          <p className="text-sm text-muted-foreground">
+            參考最低價{" "}
+            <span className="font-semibold text-foreground">
+              NT${latest.price.toLocaleString()}
+            </span>{" "}
+            起 · {Number(latest.month.slice(5))} 月出發 · {timeAgo(latest.checked_at)}更新
+          </p>
+        )}
         <CardDescription>
           {existing
             ? `目前目標價 NT$${existing.target_price.toLocaleString()}`
