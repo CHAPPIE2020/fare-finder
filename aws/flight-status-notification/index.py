@@ -16,7 +16,7 @@ import boto3
 
 SITE_URL = os.environ.get("SITE_URL", "https://fare-finder-two.vercel.app").strip().rstrip("/")
 UA = "Mozilla/5.0 (compatible; flight-notifier/1.0)"  # Resend sits behind Cloudflare (error 1010)
-ROUTE_NAMES = {"TPE-TYO": "台北 → 東京", "TPE-SEL": "台北 → 首爾"}
+ROUTE_NAMES = {"TPE-TYO": "台北 → 東京", "TPE-SEL": "台北 → 首爾", "RADAR": "爆發雷達"}
 
 _sm = boto3.client("secretsmanager")
 _resend = None
@@ -57,6 +57,27 @@ def render(msg):
     end_date = msg.get("current_period_end_date", "")
     app_url = f"{SITE_URL}/app"
 
+    if msg["event_type"] == "welcome" and msg.get("route") == "RADAR":
+        amount = msg.get("amount") or 0
+        kws = "、".join(msg.get("keywords") or [])
+        ratio = msg.get("min_ratio") or 0
+        subject = "✅ 訂閱成功：爆發雷達已啟用"
+        lines = [
+            "你已成功訂閱 <b>爆發雷達</b>（YouTube 小眾爆紅影片偵測）。",
+            f"追蹤關鍵字：<b>{html.escape(kws)}</b>；門檻：觀看數達頻道平均的 <b>{ratio:g} 倍</b>。",
+            "系統每小時檢查一次，發現正在爆的新影片就寄信給你，附上爆紅原因分析與改編點子。",
+            (f"月費 NT${amount:,}，本期有效至 <b>{html.escape(end_date)}</b>，之後每月自動續訂。"
+             if amount else f"本期有效至 <b>{html.escape(end_date)}</b>，之後每月自動續訂。"),
+        ]
+        text = (
+            "你已成功訂閱 爆發雷達（YouTube 小眾爆紅影片偵測）。\n"
+            f"追蹤關鍵字：{kws}；門檻：頻道平均的 {ratio:g} 倍\n"
+            + (f"月費 NT${amount:,}，本期有效至 {end_date}，之後每月自動續訂。\n" if amount
+               else f"本期有效至 {end_date}，之後每月自動續訂。\n")
+            + f"管理訂閱：{app_url}\n"
+        )
+        return subject, _card("訂閱成功 🎉", lines, "前往儀表板", app_url), text
+
     if msg["event_type"] == "welcome":
         amount = msg.get("amount") or 0
         target = msg.get("target_price") or 0
@@ -81,12 +102,12 @@ def render(msg):
         subject = f"已取消訂閱：{route}"
         lines = [
             f"你已取消 <b>{safe_route}</b> 的訂閱，之後不會再自動扣款。",
-            f"已付費的這一期仍然有效：降價通知會持續寄送到 <b>{html.escape(end_date)}</b>。",
+            f"已付費的這一期仍然有效：{'爆發通知' if msg.get('route') == 'RADAR' else '降價通知'}會持續寄送到 <b>{html.escape(end_date)}</b>。",
             "想恢復通知，隨時可以回到儀表板重新訂閱。",
         ]
         text = (
             f"你已取消 {route} 的訂閱，之後不會再自動扣款。\n"
-            f"降價通知會持續寄送到 {end_date}。\n"
+            f"{'爆發通知' if msg.get('route') == 'RADAR' else '降價通知'}會持續寄送到 {end_date}。\n"
             f"重新訂閱：{app_url}\n"
         )
         return subject, _card("訂閱已取消", lines, "回到儀表板", app_url), text

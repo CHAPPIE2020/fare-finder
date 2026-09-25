@@ -15,22 +15,19 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { supabase } from "@/integrations/supabase/client";
+import {
+  FLIGHT_API_URL,
+  MONTHLY_FEE_TWD,
+  cancelSubscription,
+  cardState,
+  fetchSubscriptions,
+  saveSubscription,
+  type CardState,
+  type FlightPlanName,
+  type Subscription,
+} from "@/lib/subscriptions";
 
-const FLIGHT_API_URL = import.meta.env["VITE_FLIGHT_API_URL"];
-
-/** Display only — the amount actually charged comes from the `flight/ecpay` secret on the server. */
-const MONTHLY_FEE_TWD = 300;
-
-/** The API identifies the user from this Supabase access token, not from a client-sent email. */
-async function authHeaders(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error("登入狀態已失效，請重新登入");
-  return { Authorization: `Bearer ${token}` };
-}
-
-type PlanName = "tokyo" | "seoul";
+type PlanName = FlightPlanName;
 
 type Plan = {
   name: PlanName;
@@ -41,41 +38,6 @@ const PLANS: Plan[] = [
   { name: "tokyo", title: "台北 ✈ 東京" },
   { name: "seoul", title: "台北 ✈ 首爾" },
 ];
-
-type SubscriptionStatus = "pending_payment" | "active" | "cancelled" | "expired";
-
-type Subscription = {
-  route: string;
-  plan_name: PlanName;
-  target_price: number;
-  currency: string;
-  /** Missing on legacy M1 rows (created before the paywall) — treated as unpaid. */
-  subscription_status?: SubscriptionStatus;
-  /** Fixed-width UTC, e.g. 2026-10-25T08:00:00Z (same format the server compares). */
-  current_period_end?: string;
-  current_period_end_date?: string;
-};
-
-/** What the card should show, derived from the server row. */
-type CardState = "none" | "unpaid" | "active" | "grace" | "expired";
-
-function nowUtc(): string {
-  return new Date().toISOString().slice(0, 19) + "Z";
-}
-
-function cardState(sub: Subscription | undefined): CardState {
-  if (!sub) return "none";
-  switch (sub.subscription_status) {
-    case "active":
-      return "active";
-    case "cancelled":
-      return sub.current_period_end && sub.current_period_end >= nowUtc() ? "grace" : "expired";
-    case "expired":
-      return "expired";
-    default:
-      return "unpaid"; // pending_payment, or a legacy M1 row with no status
-  }
-}
 
 type LatestPrice = {
   route: string;
@@ -98,70 +60,6 @@ function timeAgo(iso: string): string {
   if (minutes < 1) return "剛剛";
   if (minutes < 60) return `${minutes} 分鐘前`;
   return `${Math.round(minutes / 60)} 小時前`;
-}
-
-async function errorMessage(res: Response, fallback: string): Promise<string> {
-  try {
-    const data = (await res.json()) as { error?: string };
-    return data.error ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-async function fetchSubscriptions(): Promise<Subscription[]> {
-  const res = await fetch(`${FLIGHT_API_URL}/subscriptions`, { headers: await authHeaders() });
-  if (!res.ok) throw new Error("讀取訂閱狀態失敗");
-  const data = (await res.json()) as { subscriptions: Subscription[] };
-  return data.subscriptions;
-}
-
-type SaveResult = { kind: "checkout" } | { kind: "updated"; subscription: Subscription };
-
-/** Hands the browser to ECPay: submits the server-built (CheckMacValue-signed) form. */
-function submitCheckoutForm(html: string) {
-  const parsed = new DOMParser().parseFromString(html, "text/html");
-  const form = parsed.querySelector("form");
-  if (!form) throw new Error("付款頁面產生失敗，請稍後再試");
-  const imported = document.importNode(form, true);
-  imported.style.display = "none";
-  document.body.appendChild(imported);
-  imported.submit();
-}
-
-/**
- * POST /subscribe answers in one of two ways:
- *  - text/html        -> needs payment: an auto-submit form for ECPay's cashier
- *  - application/json -> already paid (or cancelled but still in the paid period): target updated in place
- */
-async function saveSubscription(payload: {
-  plan_name: PlanName;
-  target_price: number;
-}): Promise<SaveResult> {
-  const res = await fetch(`${FLIGHT_API_URL}/subscribe`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(await errorMessage(res, "儲存訂閱失敗"));
-  const contentType = res.headers.get("Content-Type") ?? "";
-  if (contentType.includes("text/html")) {
-    submitCheckoutForm(await res.text());
-    return { kind: "checkout" };
-  }
-  const data = (await res.json()) as { subscription: Subscription };
-  return { kind: "updated", subscription: data.subscription };
-}
-
-async function cancelSubscription(route: string): Promise<Subscription> {
-  const res = await fetch(`${FLIGHT_API_URL}/cancel`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-    body: JSON.stringify({ route }),
-  });
-  if (!res.ok) throw new Error(await errorMessage(res, "取消訂閱失敗"));
-  const data = (await res.json()) as { subscription: Subscription };
-  return data.subscription;
 }
 
 const POLL_AFTER_PAYMENT_MS = 60_000;
@@ -217,7 +115,12 @@ export function PlanSubscriptions({ email }: { email: string }) {
     );
   }
 
-  const anyActive = (subscriptions ?? []).some((s) => cardState(s) === "active");
+  // Paid = active, or cancelled but still inside the paid period (grace). Without "grace" the
+  // banner would fall back to "confirming…" as soon as the user cancels.
+  const anyActive = (subscriptions ?? []).some((s) => {
+    const state = cardState(s);
+    return state === "active" || state === "grace";
+  });
 
   function dismissBanner() {
     const next = new URLSearchParams(searchParams);
@@ -316,7 +219,7 @@ function PlanCard({
 
   const state = cardState(existing);
   const endDate = existing?.current_period_end_date ?? "";
-  const displayValue = hasEdited ? draft : existing ? String(existing.target_price) : draft;
+  const displayValue = hasEdited ? draft : existing ? String(existing.target_price ?? "") : draft;
   const busy = isLoading || isSaving || isRedirecting || isCancelling;
 
   function handleSubmit(event: FormEvent) {
@@ -334,7 +237,7 @@ function PlanCard({
     if (ok) onCancel();
   }
 
-  const target = existing ? `目前目標價 NT$${existing.target_price.toLocaleString()}` : "";
+  const target = existing ? `目前目標價 NT$${(existing.target_price ?? 0).toLocaleString()}` : "";
   const description: Record<CardState, string> = {
     none: `月費 NT$${MONTHLY_FEE_TWD}，設定 TWD 目標價，達標就寄信通知你`,
     unpaid: `${target} · 尚未完成付款，付款後才會開始通知`,

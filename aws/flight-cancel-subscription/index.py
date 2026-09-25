@@ -24,7 +24,7 @@ STATUS_QUEUE_URL = os.environ["STATUS_QUEUE_URL"]
 UA = "Mozilla/5.0 (compatible; flight-notifier/1.0)"
 TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 TW = timezone(timedelta(hours=8))
-PLANS = {"tokyo": "TPE-TYO", "seoul": "TPE-SEL"}
+PLANS = {"tokyo": "TPE-TYO", "seoul": "TPE-SEL", "radar": "RADAR"}
 
 _sm = boto3.client("secretsmanager")
 _sqs = boto3.client("sqs")

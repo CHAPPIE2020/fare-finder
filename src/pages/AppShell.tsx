@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { PlanSubscriptions } from "@/components/PlanSubscriptions";
+import { RadarCard } from "@/components/RadarCard";
 import { supabase } from "@/integrations/supabase/client";
 import { useDocumentMeta } from "@/hooks/useDocumentMeta";
 import type { AuthenticatedOutletContext } from "@/routes/ProtectedRoute";
@@ -45,6 +46,9 @@ export function AppShell() {
           </p>
           <div className="mt-8">
             <PlanSubscriptions email={user.email ?? ""} />
+          </div>
+          <div className="mt-8">
+            <RadarCard email={user.email ?? ""} />
           </div>
         </div>
       </main>

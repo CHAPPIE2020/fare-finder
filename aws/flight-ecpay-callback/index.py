@@ -187,6 +187,9 @@ def _handle_first_charge(params, item, email, route, mtn, rtn, now, period_type,
         "plan_name": item.get("plan_name"), "target_price": _int(item.get("target_price")),
         "amount": _int(params.get("TradeAmt") or params.get("Amount")),
         "current_period_end_date": end.astimezone(TW).strftime("%Y-%m-%d"),
+        # Viral Radar rows carry keywords + a threshold instead of a target price
+        "keywords": [str(k) for k in (item.get("keywords") or [])],
+        "min_ratio": float(item.get("min_ratio") or 0),
     })
     return _text("1|OK")
 

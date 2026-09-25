@@ -13,6 +13,7 @@ Only the ECPay callbacks ever set "active".
 import html
 import json
 import os
+import re
 import secrets
 import urllib.error
 import urllib.parse
@@ -36,9 +37,12 @@ TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 TW = timezone(timedelta(hours=8))
 
 PLANS = {
-    "tokyo": {"origin": "TPE", "destination": "TYO", "title": "台北-東京"},
-    "seoul": {"origin": "TPE", "destination": "SEL", "title": "台北-首爾"},
+    "tokyo": {"origin": "TPE", "destination": "TYO", "item_name": "機票降價通知 月訂閱 台北-東京"},
+    "seoul": {"origin": "TPE", "destination": "SEL", "item_name": "機票降價通知 月訂閱 台北-首爾"},
+    # Viral Radar (小眾爆發雷達): same paywall, different product. One row per user, route RADAR.
+    "radar": {"route": "RADAR", "item_name": "爆發雷達 月訂閱 YouTube"},
 }
+RADAR_MAX_KEYWORDS = int(os.environ.get("RADAR_MAX_KEYWORDS", "3"))
 
 ddb = boto3.resource("dynamodb").Table("subscriptions")
 _sm = boto3.client("secretsmanager")
@@ -98,9 +102,11 @@ def _api_base(event):
     return "https://" + domain
 
 
-def _checkout_form(event, email, route, plan, trade_no, now_tw):
+def _checkout_form(event, email, route, plan_name, trade_no, now_tw):
     cfg = _ecpay_config()
-    amount = str(int(cfg["amount"]))
+    # optional per-plan price in the secret, e.g. "amount_radar": "199"; falls back to "amount"
+    amount = str(int(cfg.get("amount_" + plan_name) or cfg["amount"]))
+    plan = PLANS[plan_name]
     api = _api_base(event)
     host = "payment.ecpay.com.tw" if cfg.get("env") == "prod" else "payment-stage.ecpay.com.tw"
     params = {
@@ -110,7 +116,7 @@ def _checkout_form(event, email, route, plan, trade_no, now_tw):
         "PaymentType": "aio",
         "TotalAmount": amount,
         "TradeDesc": "Flight Price Notifier monthly plan",
-        "ItemName": "機票降價通知 月訂閱 %s" % plan["title"],
+        "ItemName": plan["item_name"],
         "ReturnURL": api + "/ecpay-return",
         "OrderResultURL": api + "/ecpay-result",
         "ClientBackURL": SITE_URL + "/app",
@@ -144,6 +150,50 @@ def _is_paid(item, now_str):
     return status == "cancelled" and (item.get("current_period_end") or "") >= now_str
 
 
+def _radar_settings(body):
+    """keywords: list or comma/、 separated string (1..RADAR_MAX_KEYWORDS); min_ratio 1.5..50."""
+    raw = body.get("keywords") or []
+    if isinstance(raw, str):
+        raw = re.split(r"[,，、;；\n]", raw)
+    keywords, seen = [], set()
+    for k in raw:
+        k = " ".join(str(k).split())
+        if k and k.lower() not in seen:
+            seen.add(k.lower())
+            keywords.append(k[:30])
+    if not keywords:
+        return None, "請至少輸入 1 個關鍵字"
+    if len(keywords) > RADAR_MAX_KEYWORDS:
+        return None, "關鍵字最多 %d 個" % RADAR_MAX_KEYWORDS
+    try:
+        min_ratio = float(body.get("min_ratio", 3))
+    except (TypeError, ValueError):
+        return None, "min_ratio 必須是數字"
+    if not 1.5 <= min_ratio <= 50:
+        return None, "爆發倍數門檻需介於 1.5 到 50"
+    return {"keywords": keywords, "min_ratio": Decimal(str(min_ratio))}, None
+
+
+def _plain(settings):
+    return {k: (float(v) if isinstance(v, Decimal) else v) for k, v in settings.items()}
+
+
+def _update(email, route, set_values, set_if_missing=None, return_new=False):
+    """UpdateItem with aliased attribute names (avoids DynamoDB reserved words)."""
+    names, values, parts = {}, {}, []
+    for i, (k, v) in enumerate(set_values.items()):
+        names["#s%d" % i], values[":s%d" % i] = k, v
+        parts.append("#s%d = :s%d" % (i, i))
+    for i, (k, v) in enumerate((set_if_missing or {}).items()):
+        names["#m%d" % i], values[":m%d" % i] = k, v
+        parts.append("#m%d = if_not_exists(#m%d, :m%d)" % (i, i, i))
+    kwargs = {"Key": {"email": email, "route": route}, "UpdateExpression": "SET " + ", ".join(parts),
+              "ExpressionAttributeNames": names, "ExpressionAttributeValues": values}
+    if return_new:
+        kwargs["ReturnValues"] = "ALL_NEW"
+    return ddb.update_item(**kwargs)
+
+
 def handler(event, context):
     email = verified_email(event)
     if not email:
@@ -157,21 +207,28 @@ def handler(event, context):
         return _response(400, {"error": "invalid JSON body"})
 
     plan_name = body.get("plan_name")
-    target_price = body.get("target_price")
-
     if plan_name not in PLANS:
-        return _response(400, {"error": "plan_name must be one of: tokyo, seoul"})
-    try:
-        target_price_num = float(target_price)
-        if target_price_num <= 0:
-            raise ValueError()
-    except (TypeError, ValueError):
-        return _response(400, {"error": "target_price must be a positive number"})
-
+        return _response(400, {"error": "plan_name must be one of: " + ", ".join(PLANS)})
     plan = PLANS[plan_name]
-    origin = plan["origin"]
-    destination = plan["destination"]
-    route = origin + "-" + destination
+
+    if plan_name == "radar":
+        settings, error = _radar_settings(body)
+        if error:
+            return _response(400, {"error": error})
+        route = plan["route"]
+        record = {"plan_name": plan_name, "currency": "TWD", **settings}
+    else:
+        try:
+            target_price_num = float(body.get("target_price"))
+            if target_price_num <= 0:
+                raise ValueError()
+        except (TypeError, ValueError):
+            return _response(400, {"error": "target_price must be a positive number"})
+        settings = {"target_price": Decimal(str(target_price_num))}
+        route = plan["origin"] + "-" + plan["destination"]
+        record = {"plan_name": plan_name, "origin": plan["origin"], "destination": plan["destination"],
+                  "currency": "TWD", **settings}
+
     now_utc = datetime.now(timezone.utc)
     now = now_utc.isoformat()
     now_str = now_utc.strftime(TS_FMT)
@@ -179,34 +236,21 @@ def handler(event, context):
     existing = ddb.get_item(Key={"email": email, "route": route}).get("Item")
 
     if existing and _is_paid(existing, now_str):
-        # Paid (or cancelled-in-grace): in-place target update, status unchanged, no re-payment.
-        result = ddb.update_item(
-            Key={"email": email, "route": route},
-            UpdateExpression="SET target_price=:t, updated_at=:u",
-            ExpressionAttributeValues={":t": Decimal(str(target_price_num)), ":u": now},
-            ReturnValues="ALL_NEW",
-        )
-        print("in-place target update %s#%s -> %s (%s)"
-              % (email, route, target_price_num, existing.get("subscription_status")))
+        # Paid (or cancelled-in-grace): in-place settings update, status unchanged, no re-payment.
+        result = _update(email, route, {**settings, "updated_at": now}, return_new=True)
+        print("in-place update %s#%s -> %s (%s)"
+              % (email, route, _plain(settings), existing.get("subscription_status")))
         return _response(200, {"subscription": result["Attributes"]})
 
     # Needs payment: write pending_payment + a fresh trade-no, return the ECPay checkout form.
     now_tw = now_utc.astimezone(TW)
     trade_no = _new_trade_no(now_tw)
-    form_html, amount = _checkout_form(event, email, route, plan, trade_no, now_tw)
-    ddb.update_item(
-        Key={"email": email, "route": route},
-        UpdateExpression="SET plan_name=:p, origin=:o, destination=:d, target_price=:t, "
-                         "currency=:c, updated_at=:u, created_at=if_not_exists(created_at, :u), "
-                         "subscription_status=:s, merchant_trade_no=:m, amount=:a, "
-                         "period_type=:pt, period_frequency=:pf",
-        ExpressionAttributeValues={
-            ":p": plan_name, ":o": origin, ":d": destination,
-            ":t": Decimal(str(target_price_num)), ":c": "TWD", ":u": now,
-            ":s": "pending_payment", ":m": trade_no, ":a": amount,
-            ":pt": PERIOD_TYPE, ":pf": PERIOD_FREQUENCY,
-        },
-    )
+    form_html, amount = _checkout_form(event, email, route, plan_name, trade_no, now_tw)
+    _update(email, route, {
+        **record, "updated_at": now, "subscription_status": "pending_payment",
+        "merchant_trade_no": trade_no, "amount": amount,
+        "period_type": PERIOD_TYPE, "period_frequency": PERIOD_FREQUENCY,
+    }, set_if_missing={"created_at": now})
     print("checkout %s#%s trade_no=%s amount=%s period=%s/%s/%s (was %s)"
           % (email, route, trade_no, amount, PERIOD_TYPE, PERIOD_FREQUENCY, EXEC_TIMES,
              existing.get("subscription_status") if existing else "new"))
