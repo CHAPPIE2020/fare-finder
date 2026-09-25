@@ -11,6 +11,7 @@ discover: MAX_KEYWORDS_PER_RUN (default 20) x 4 runs/day = 80 searches/day.
 Paywall: only subscribers whose RADAR row is active, or cancelled but still inside the paid
 period, are scanned/alerted (same rule as flight-parser). Lapsed grace rows become expired.
 """
+import html
 import json
 import os
 import urllib.error
@@ -33,6 +34,7 @@ MAX_KEYWORDS_PER_RUN = int(os.environ.get("MAX_KEYWORDS_PER_RUN", "20"))
 MIN_VIEWS = int(os.environ.get("MIN_VIEWS", "3000"))
 MAX_VIDEOS_PER_ALERT = int(os.environ.get("MAX_VIDEOS_PER_ALERT", "5"))
 TTL_DAYS = 3
+RESEARCH_AFTER_HOURS = int(os.environ.get("RESEARCH_AFTER_HOURS", "3"))
 
 _sm = boto3.client("secretsmanager")
 _sqs = boto3.client("sqs")
@@ -129,9 +131,35 @@ def _norm(keyword):
 
 
 # ---------------------------------------------------------------- discover
-def discover(run_index):
+def _kw_marker(kw):
+    return "#kw#" + kw
+
+
+def _recently_searched(kw):
+    """True if this keyword was searched within RESEARCH_AFTER_HOURS (saves the 100/day search quota)."""
+    item = _videos.get_item(Key={"video_id": _kw_marker(kw)}).get("Item") or {}
+    cutoff = (_now() - timedelta(hours=RESEARCH_AFTER_HOURS)).strftime(TS_FMT)
+    return (item.get("last_searched_at") or "") >= cutoff
+
+
+def _mark_searched(kw):
+    _update(_videos, {"video_id": _kw_marker(kw)},
+            {"last_searched_at": _now().strftime(TS_FMT),
+             "expires_at": int((_now() + timedelta(days=TTL_DAYS)).timestamp())})
+
+
+def discover(run_index, only_keywords=None):
     subs = _paid_radar_rows()
-    keywords = sorted({_norm(k) for s in subs for k in (s.get("keywords") or []) if str(k).strip()})
+    paid_keywords = sorted({_norm(k) for s in subs for k in (s.get("keywords") or []) if str(k).strip()})
+    if only_keywords is not None:
+        # kickoff after payment / settings change: just the new keywords, and only if they are paid
+        wanted = {_norm(k) for k in only_keywords if str(k).strip()}
+        keywords = [k for k in paid_keywords if k in wanted and not _recently_searched(k)]
+        if not keywords:
+            print("kickoff: nothing to search (not paid, or searched in the last %dh)" % RESEARCH_AFTER_HOURS)
+            return {"searched": 0, "stored": 0}
+    else:
+        keywords = paid_keywords
     if not keywords:
         print("discover: no paid radar keywords")
         return {"searched": 0, "stored": 0}
@@ -153,6 +181,7 @@ def discover(run_index):
             print("discover: search quota exhausted, stopping this run")
             break
         searched += 1
+        _mark_searched(kw)
         for item in (data or {}).get("items", []):
             vid = (item.get("id") or {}).get("videoId")
             sn = item.get("snippet") or {}
@@ -175,9 +204,10 @@ def discover(run_index):
         _update(
             _videos, {"video_id": vid},
             {
-                "title": sn.get("title", ""), "channel_id": sn.get("channelId", ""),
-                "channel_title": sn.get("channelTitle", ""), "published_at": sn.get("publishedAt", ""),
-                "description": (sn.get("description") or "")[:500],
+                "title": html.unescape(sn.get("title", "")), "channel_id": sn.get("channelId", ""),
+                "channel_title": html.unescape(sn.get("channelTitle", "")),
+                "published_at": sn.get("publishedAt", ""),
+                "description": html.unescape(sn.get("description") or "")[:500],
                 "channel_avg_views": Decimal(str(base.get("avg_views", 0))),
                 "channel_subscribers": Decimal(str(base.get("subscribers", 0))),
                 "expires_at": expires, "last_discovered_at": now_str,
@@ -257,7 +287,8 @@ def track():
             },
         )
         scored.append({
-            "video_id": c["video_id"], "title": c.get("title", ""), "channel_title": c.get("channel_title", ""),
+            "video_id": c["video_id"], "title": html.unescape(c.get("title", "")),
+            "channel_title": html.unescape(c.get("channel_title", "")),
             "published_at": c.get("published_at", ""), "views": st["views"], "ratio": round(ratio, 1),
             "views_per_hour": round(velocity), "age_hours": round(age_h, 1), "duration": st["duration"],
             "keywords": sorted(c.get("keywords") or []),
@@ -286,7 +317,11 @@ def track():
 
 def handler(event, context):
     mode = (event or {}).get("mode", "track")
+    run_index = int(_now().timestamp() // (6 * 3600))
     if mode == "discover":
-        run_index = int(_now().timestamp() // (6 * 3600))
         return discover(run_index)
+    if mode == "kickoff":
+        # fired right after a RADAR payment or a keyword change, so the user doesn't wait up to 6h
+        found = discover(run_index, only_keywords=(event or {}).get("keywords") or [])
+        return {"discover": found, "track": track()}
     return track()

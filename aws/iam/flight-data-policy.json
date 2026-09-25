@@ -47,7 +47,10 @@
     {
       "Effect": "Allow",
       "Action": "lambda:InvokeFunction",
-      "Resource": "arn:aws:lambda:us-east-1:767397924129:function:flight-parser"
+      "Resource": [
+        "arn:aws:lambda:us-east-1:767397924129:function:flight-parser",
+        "arn:aws:lambda:us-east-1:767397924129:function:radar-scan"
+      ]
     }
   ]
 }

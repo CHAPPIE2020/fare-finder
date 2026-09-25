@@ -28,6 +28,8 @@ FAIL_LIMIT = 6  # ECPay auto-terminates the series after 6 consecutive failed ch
 _sm = boto3.client("secretsmanager")
 _sqs = boto3.client("sqs")
 _table = boto3.resource("dynamodb").Table("subscriptions")
+_lambda = boto3.client("lambda")
+RADAR_SCAN_FUNCTION = os.environ.get("RADAR_SCAN_FUNCTION", "radar-scan")
 _cfg = None
 
 
@@ -89,6 +91,17 @@ def _parse_ts(value):
         return datetime.strptime(value, TS_FMT).replace(tzinfo=timezone.utc)
     except (TypeError, ValueError):
         return None
+
+
+def _kickoff_radar(keywords):
+    """Start a Viral Radar search right away instead of waiting up to 6h for the schedule."""
+    try:
+        _lambda.invoke(FunctionName=RADAR_SCAN_FUNCTION, InvocationType="Event",
+                       Payload=json.dumps({"mode": "kickoff", "keywords": list(keywords)},
+                                          ensure_ascii=False).encode("utf-8"))
+        print("radar kickoff requested for %s" % list(keywords))
+    except Exception as err:  # never fail the payment/settings flow because of this
+        print("radar kickoff failed (the 6h schedule will still pick it up): %s" % err)
 
 
 def _enqueue(message):
@@ -191,6 +204,8 @@ def _handle_first_charge(params, item, email, route, mtn, rtn, now, period_type,
         "keywords": [str(k) for k in (item.get("keywords") or [])],
         "min_ratio": float(item.get("min_ratio") or 0),
     })
+    if route == "RADAR":
+        _kickoff_radar(item.get("keywords") or [])
     return _text("1|OK")
 
 

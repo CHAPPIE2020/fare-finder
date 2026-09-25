@@ -45,6 +45,8 @@ PLANS = {
 RADAR_MAX_KEYWORDS = int(os.environ.get("RADAR_MAX_KEYWORDS", "3"))
 
 ddb = boto3.resource("dynamodb").Table("subscriptions")
+_lambda = boto3.client("lambda")
+RADAR_SCAN_FUNCTION = os.environ.get("RADAR_SCAN_FUNCTION", "radar-scan")
 _sm = boto3.client("secretsmanager")
 _ecpay = None
 
@@ -174,6 +176,17 @@ def _radar_settings(body):
     return {"keywords": keywords, "min_ratio": Decimal(str(min_ratio))}, None
 
 
+def _kickoff_radar(keywords):
+    """Start a Viral Radar search right away instead of waiting up to 6h for the schedule."""
+    try:
+        _lambda.invoke(FunctionName=RADAR_SCAN_FUNCTION, InvocationType="Event",
+                       Payload=json.dumps({"mode": "kickoff", "keywords": list(keywords)},
+                                          ensure_ascii=False).encode("utf-8"))
+        print("radar kickoff requested for %s" % list(keywords))
+    except Exception as err:  # never fail the payment/settings flow because of this
+        print("radar kickoff failed (the 6h schedule will still pick it up): %s" % err)
+
+
 def _plain(settings):
     return {k: (float(v) if isinstance(v, Decimal) else v) for k, v in settings.items()}
 
@@ -240,6 +253,11 @@ def handler(event, context):
         result = _update(email, route, {**settings, "updated_at": now}, return_new=True)
         print("in-place update %s#%s -> %s (%s)"
               % (email, route, _plain(settings), existing.get("subscription_status")))
+        if plan_name == "radar":
+            before = {k.lower() for k in (existing.get("keywords") or [])}
+            added = [k for k in settings["keywords"] if k.lower() not in before]
+            if added:
+                _kickoff_radar(added)
         return _response(200, {"subscription": result["Attributes"]})
 
     # Needs payment: write pending_payment + a fresh trade-no, return the ECPay checkout form.
