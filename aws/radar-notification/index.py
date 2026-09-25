@@ -29,6 +29,7 @@ _sm = boto3.client("secretsmanager")
 _ddb = boto3.resource("dynamodb")
 _history = _ddb.Table("notification_history")
 _videos = _ddb.Table("radar_videos")
+_subs = _ddb.Table("subscriptions")
 _resend = None
 _anthropic = "unset"
 
@@ -156,11 +157,11 @@ def render(keywords, videos):
         '<h1 style="font-size:20px;margin:0 0 6px">爆發雷達 🔥</h1>'
         '<p style="margin:0 0 18px;color:#555">你關注的「%s」領域，這幾支 YouTube 新影片表現遠超過頻道平常水準：</p>%s'
         '<p style="margin:20px 0"><a href="%s/app" style="background:#6d28d9;color:#fff;padding:10px 18px;'
-        'border-radius:8px;text-decoration:none;font-weight:600">調整關鍵字 / 門檻</a></p>'
+        'border-radius:8px;text-decoration:none;font-weight:600">調整關鍵字 / 門檻 / 暫停通知</a></p>'
         '<p style="font-size:12px;color:#666">數據來源：YouTube Data API。AI 分析僅供參考。</p></div>'
         % (html.escape(kw), "".join(blocks), SITE_URL)
     )
-    text_body = "\n".join(lines) + "\n調整關鍵字 / 門檻：%s/app\n" % SITE_URL
+    text_body = "\n".join(lines) + "\n調整關鍵字 / 門檻 / 暫停通知：%s/app\n" % SITE_URL
     return subject, html_body, text_body
 
 
@@ -187,12 +188,21 @@ def _send(to, subject, html_body, text_body):
         raise Transient(str(err))
 
 
+def _wants_alerts(email):
+    """Re-check at send time: the subscriber may have paused notifications after the scan queued this."""
+    row = _subs.get_item(Key={"email": email, "route": "RADAR"}).get("Item") or {}
+    return not row.get("notifications_paused")
+
+
 def handler(event, context):
     failures = []
     for record in event.get("Records", []):
         try:
             msg = json.loads(record["body"])
             email = msg["email"]
+            if not _wants_alerts(email):
+                print("skipped (notifications paused) %s" % email)
+                continue
             fresh = [v for v in msg.get("videos", []) if not _already_sent(email, v["video_id"])]
             if not fresh:
                 print("skipped (all already sent) %s" % email)

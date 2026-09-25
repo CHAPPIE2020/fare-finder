@@ -105,10 +105,13 @@ def render(msg):
             f"已付費的這一期仍然有效：{'爆發通知' if msg.get('route') == 'RADAR' else '降價通知'}會持續寄送到 <b>{html.escape(end_date)}</b>。",
             "想恢復通知，隨時可以回到儀表板重新訂閱。",
         ]
+        if msg.get("route") == "RADAR":
+            lines.insert(2, "不想再收到爆發通知？到儀表板的爆發雷達卡片按「暫停通知」即可。")
         text = (
             f"你已取消 {route} 的訂閱，之後不會再自動扣款。\n"
             f"{'爆發通知' if msg.get('route') == 'RADAR' else '降價通知'}會持續寄送到 {end_date}。\n"
-            f"重新訂閱：{app_url}\n"
+            + ("不想再收到爆發通知？到儀表板的爆發雷達卡片按「暫停通知」即可。\n" if msg.get("route") == "RADAR" else "")
+            + f"重新訂閱：{app_url}\n"
         )
         return subject, _card("訂閱已取消", lines, "回到儀表板", app_url), text
 

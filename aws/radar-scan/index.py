@@ -77,8 +77,12 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _paid_radar_rows():
-    """Paid RADAR subscribers; lazily retire cancelled rows whose paid period has ended."""
+def _paid_radar_rows(include_paused=False):
+    """Paid RADAR subscribers; lazily retire cancelled rows whose paid period has ended.
+
+    Subscribers who switched notifications off (notifications_paused) are left out by default:
+    their keywords are not searched and they get no alerts, but their paid period is unchanged.
+    """
     now_str = _now().strftime(TS_FMT)
     rows, kwargs = [], {"FilterExpression": Attr("route").eq(ROUTE)}
     while True:
@@ -103,6 +107,11 @@ def _paid_radar_rows():
                     ExpressionAttributeValues={":x": "expired", ":c": "cancelled", ":n": now_str},
                 )
                 print("grace over: %s#RADAR cancelled -> expired" % it["email"])
+    if not include_paused:
+        paused = [it["email"] for it in paid if it.get("notifications_paused")]
+        if paused:
+            print("notifications paused for %d subscriber(s)" % len(paused))
+        paid = [it for it in paid if not it.get("notifications_paused")]
     return paid
 
 

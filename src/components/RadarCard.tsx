@@ -20,6 +20,7 @@ import {
   cardState,
   fetchSubscriptions,
   saveSubscription,
+  setRadarPaused,
   type CardState,
 } from "@/lib/subscriptions";
 
@@ -72,6 +73,12 @@ export function RadarCard({ email }: { email: string }) {
       }
     },
   });
+  const pauseMutation = useMutation({
+    mutationFn: setRadarPaused,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["subscriptions", email] });
+    },
+  });
   const cancelMutation = useMutation({
     mutationFn: cancelSubscription,
     onSuccess: () => {
@@ -82,7 +89,14 @@ export function RadarCard({ email }: { email: string }) {
   if (!FLIGHT_API_URL) return null;
 
   const isRedirecting = saveMutation.data?.kind === "checkout";
-  const busy = isLoading || saveMutation.isPending || isRedirecting || cancelMutation.isPending;
+  const busy =
+    isLoading ||
+    saveMutation.isPending ||
+    isRedirecting ||
+    cancelMutation.isPending ||
+    pauseMutation.isPending;
+  const paid = state === "active" || state === "grace";
+  const paused = paid && Boolean(existing?.notifications_paused);
   const endDate = existing?.current_period_end_date ?? "";
   const tracked = (existing?.keywords ?? []).join("、");
 
@@ -122,7 +136,11 @@ export function RadarCard({ email }: { email: string }) {
     grace: "更新設定",
     expired: "重新訂閱並付款",
   };
-  const error = formError ?? saveMutation.error?.message ?? cancelMutation.error?.message;
+  const error =
+    formError ??
+    saveMutation.error?.message ??
+    cancelMutation.error?.message ??
+    pauseMutation.error?.message;
 
   return (
     <Card>
@@ -135,6 +153,11 @@ export function RadarCard({ email }: { email: string }) {
           {state === "expired" && <Badge variant="outline">已結束</Badge>}
         </div>
         <CardDescription>{description[state]}</CardDescription>
+        {paused && (
+          <p className="text-sm text-muted-foreground">
+            ⏸️ 通知已暫停：目前不會寄爆發通知信，也不影響扣款與有效期限。
+          </p>
+        )}
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
@@ -181,6 +204,16 @@ export function RadarCard({ email }: { email: string }) {
                 ? "處理中…"
                 : submitLabel[state]}
           </Button>
+          {paid && (
+            <Button
+              type="button"
+              variant={paused ? "default" : "secondary"}
+              disabled={busy}
+              onClick={() => pauseMutation.mutate(!paused)}
+            >
+              {pauseMutation.isPending ? "更新中…" : paused ? "恢復通知" : "暫停通知"}
+            </Button>
+          )}
           {state === "active" && (
             <Button type="button" variant="outline" disabled={busy} onClick={handleCancel}>
               {cancelMutation.isPending ? "取消中…" : "取消訂閱"}

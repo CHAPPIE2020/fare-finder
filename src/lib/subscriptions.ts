@@ -31,6 +31,8 @@ export type Subscription = {
   keywords?: string[];
   /** Viral Radar only: alert when views >= channel average x min_ratio. */
   min_ratio?: number;
+  /** Viral Radar only: subscriber switched alert emails off (billing unchanged). */
+  notifications_paused?: boolean;
   currency: string;
   /** Missing on legacy M1 rows (created before the paywall) — treated as unpaid. */
   subscription_status?: SubscriptionStatus;
@@ -112,6 +114,18 @@ export async function saveSubscription(payload: SavePayload): Promise<SaveResult
   }
   const data = (await res.json()) as { subscription: Subscription };
   return { kind: "updated", subscription: data.subscription };
+}
+
+/** Viral Radar "暫停通知" switch — stops/resumes alert emails without touching billing. */
+export async function setRadarPaused(paused: boolean): Promise<Subscription> {
+  const res = await fetch(`${FLIGHT_API_URL}/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ plan_name: "radar", notifications_paused: paused }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "更新通知設定失敗"));
+  const data = (await res.json()) as { subscription: Subscription };
+  return data.subscription;
 }
 
 export async function cancelSubscription(route: string): Promise<Subscription> {

@@ -207,6 +207,25 @@ def _update(email, route, set_values, set_if_missing=None, return_new=False):
     return ddb.update_item(**kwargs)
 
 
+def _toggle_radar_pause(email, paused):
+    """Viral Radar "暫停通知" switch: paid subscribers (incl. cancelled-in-grace) can stop/resume
+    alert emails without touching billing or the paid-through date."""
+    if not isinstance(paused, bool):
+        return _response(400, {"error": "notifications_paused must be true or false"})
+    route = PLANS["radar"]["route"]
+    now_utc = datetime.now(timezone.utc)
+    existing = ddb.get_item(Key={"email": email, "route": route}).get("Item")
+    if not existing or not _is_paid(existing, now_utc.strftime(TS_FMT)):
+        return _response(400, {"error": "訂閱尚未生效，無法調整通知"})
+    result = _update(email, route, {"notifications_paused": paused, "updated_at": now_utc.isoformat()},
+                     return_new=True)
+    print("radar notifications %s for %s (%s)"
+          % ("PAUSED" if paused else "resumed", email, existing.get("subscription_status")))
+    if existing.get("notifications_paused") and not paused:
+        _kickoff_radar(existing.get("keywords") or [])  # catch up right away after resuming
+    return _response(200, {"subscription": result["Attributes"]})
+
+
 def handler(event, context):
     email = verified_email(event)
     if not email:
@@ -223,6 +242,9 @@ def handler(event, context):
     if plan_name not in PLANS:
         return _response(400, {"error": "plan_name must be one of: " + ", ".join(PLANS)})
     plan = PLANS[plan_name]
+
+    if plan_name == "radar" and "notifications_paused" in body and "keywords" not in body:
+        return _toggle_radar_pause(email, body.get("notifications_paused"))
 
     if plan_name == "radar":
         settings, error = _radar_settings(body)
@@ -268,6 +290,8 @@ def handler(event, context):
         **record, "updated_at": now, "subscription_status": "pending_payment",
         "merchant_trade_no": trade_no, "amount": amount,
         "period_type": PERIOD_TYPE, "period_frequency": PERIOD_FREQUENCY,
+        # a fresh (re)subscription starts with notifications on
+        **({"notifications_paused": False} if plan_name == "radar" else {}),
     }, set_if_missing={"created_at": now})
     print("checkout %s#%s trade_no=%s amount=%s period=%s/%s/%s (was %s)"
           % (email, route, trade_no, amount, PERIOD_TYPE, PERIOD_FREQUENCY, EXEC_TIMES,
